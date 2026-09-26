@@ -19,6 +19,8 @@ export interface Telescope {
   terminals: TerminalType[];
   /** 最大载荷（kg） */
   maxPayloadKg: number;
+  /** 换装缓冲（分钟）：相邻排程段更换终端或滤镜后所需的重新调焦/准备时间 */
+  changeoverMinutes: number;
   /** 当前状态 */
   status: TelescopeStatus;
 }

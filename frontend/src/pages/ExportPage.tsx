@@ -9,6 +9,7 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import Timeline, { type TimelineBar } from '../components/common/Timeline';
+import ChangeoverLayer from '../components/common/ChangeoverLayer';
 import ConflictBadge from '../components/common/ConflictBadge';
 import StatusChip from '../components/common/StatusChip';
 import { usePersistentStore } from '../hooks/usePersistentStore';
@@ -19,6 +20,7 @@ import { useTargetStore } from '../stores/targetStore';
 import { useEquipmentStore } from '../stores/equipmentStore';
 import { NIGHT_TOTAL_MINUTES, TARGET_COLOR } from '../types';
 import { axisMinutes, timelineTicks } from '../utils/astro';
+import { changeoverGaps } from '../utils/changeover';
 import { buildNightPlanText, buildPlanCsv, downloadText, printPage } from '../utils/export';
 
 /** 导出当晚观测清单（文本 / CSV / 打印视图） */
@@ -38,6 +40,7 @@ export default function ExportPage() {
   const nightSessions = useMemo(() => sessions.filter((session) => session.nightId === night?.id), [sessions, night?.id]);
   const conflicts = useMemo(() => conflictsOfNight(night?.id ?? ''), [conflictsOfNight, night?.id]);
   const ids = useMemo(() => conflictIds(night?.id), [conflictIds, night?.id]);
+  const changeovers = useMemo(() => changeoverGaps(sessions, telescopes, night?.id), [sessions, telescopes, night?.id]);
 
   const planText = useMemo(
     () => buildNightPlanText({ night, sessions: nightSessions, targets, telescopes, instruments }),
@@ -92,6 +95,12 @@ export default function ExportPage() {
         </TextField>
         <Chip size="small" label={`排程段 ${nightSessions.length}`} />
         <Chip size="small" label={`计划帧数合计 ${nightSessions.reduce((sum, session) => sum + session.plannedFrames, 0)}`} />
+        <Chip
+          size="small"
+          color={changeovers.some((gap) => gap.insufficient) ? 'warning' : 'default'}
+          variant={changeovers.some((gap) => gap.insufficient) ? 'filled' : 'outlined'}
+          label={`换装缓冲 ${changeovers.length} 段`}
+        />
         <ConflictBadge conflicts={conflicts} />
         <Button
           variant="contained"
@@ -118,7 +127,9 @@ export default function ExportPage() {
       </Stack>
 
       <Box className="no-print" sx={{ mb: 3 }}>
-        <Timeline bars={bars} ticks={timelineTicks(120)} totalMinutes={NIGHT_TOTAL_MINUTES} conflictIds={ids} height={104} />
+        <Timeline bars={bars} ticks={timelineTicks(120)} totalMinutes={NIGHT_TOTAL_MINUTES} conflictIds={ids} height={104}>
+          <ChangeoverLayer gaps={changeovers} totalMinutes={NIGHT_TOTAL_MINUTES} height={104} />
+        </Timeline>
       </Box>
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '2fr 1fr' }, gap: 2 }}>
@@ -139,6 +150,7 @@ export default function ExportPage() {
               .sort((a, b) => axisMinutes(a.startTime) - axisMinutes(b.startTime))
               .map((session) => {
                 const target = targets.find((item) => item.id === session.targetId);
+                const changeover = changeovers.find((gap) => gap.prevSessionId === session.id);
                 return (
                   <Stack key={session.id} direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                     <Chip size="small" label={`${session.startTime}-${session.endTime}`} />
@@ -146,6 +158,14 @@ export default function ExportPage() {
                     <Chip size="small" variant="outlined" label={session.filterSlot} />
                     <Chip size="small" variant="outlined" label={`${session.plannedFrames} 帧`} />
                     <StatusChip status={session.status} />
+                    {changeover ? (
+                      <Chip
+                        size="small"
+                        color={changeover.insufficient ? 'warning' : 'default'}
+                        variant="outlined"
+                        label={`下一段最早 ${changeover.earliestStart} 开始`}
+                      />
+                    ) : null}
                   </Stack>
                 );
               })}

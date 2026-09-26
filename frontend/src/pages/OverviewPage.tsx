@@ -10,6 +10,7 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import Chip from '@mui/material/Chip';
 import Timeline, { type TimelineBar } from '../components/common/Timeline';
+import ChangeoverLayer from '../components/common/ChangeoverLayer';
 import StatusChip from '../components/common/StatusChip';
 import ConflictBadge from '../components/common/ConflictBadge';
 import { usePersistentStore } from '../hooks/usePersistentStore';
@@ -20,6 +21,7 @@ import { useTargetStore } from '../stores/targetStore';
 import { useEquipmentStore } from '../stores/equipmentStore';
 import { NIGHT_TOTAL_MINUTES, TARGET_COLOR } from '../types';
 import { altitudeAt, axisMinutes, isBelowThreshold, minutesToTime, moonBrightnessFactor, moonConflict, moonPhaseText, timelineTicks } from '../utils/astro';
+import { changeoverGaps, describeChangeover } from '../utils/changeover';
 
 /** 本夜编排总览：30 分钟刻度时间轴 + 月相与月出月落条带 + 冲突与标灰提示 */
 export default function OverviewPage() {
@@ -37,6 +39,10 @@ export default function OverviewPage() {
   const nightSessions = useMemo(() => sessions.filter((session) => session.nightId === night?.id), [sessions, night?.id]);
   const ids = useMemo(() => conflictIds(night?.id), [conflictIds, night?.id]);
   const conflicts = useMemo(() => conflictsOfNight(night?.id ?? ''), [conflictsOfNight, night?.id]);
+
+  /** 本夜相邻段的换装缓冲（终端或滤镜变化的段对），时间轴上画出这段准备时间 */
+  const changeovers = useMemo(() => changeoverGaps(sessions, telescopes, night?.id), [sessions, telescopes, night?.id]);
+  const insufficientChangeovers = useMemo(() => changeovers.filter((gap) => gap.insufficient), [changeovers]);
 
   /** 以夜间 22:00 作为高度角评估时刻 */
   const evaluateDate = useMemo(() => new Date(`${night?.date ?? '2025-10-11'}T22:00:00`), [night?.date]);
@@ -117,6 +123,12 @@ export default function OverviewPage() {
         </TextField>
         <Chip label={`值班人 ${night.dutyOfficer}`} size="small" />
         <Chip label={`月相 ${night.moonPhasePct}%（${moonPhaseText(night.moonPhasePct)}）· 亮度折算 ${moonBrightnessFactor(night.moonPhasePct)}`} size="small" color="primary" variant="outlined" />
+        <Chip
+          label={`换装缓冲 ${changeovers.length} 段${insufficientChangeovers.length ? `（不足 ${insufficientChangeovers.length}）` : ''}`}
+          size="small"
+          color={insufficientChangeovers.length ? 'warning' : 'default'}
+          variant={insufficientChangeovers.length ? 'filled' : 'outlined'}
+        />
         <ConflictBadge conflicts={conflicts} />
       </Stack>
 
@@ -170,8 +182,18 @@ export default function OverviewPage() {
         </Alert>
       ) : null}
 
-      {dimmedTargets.length > 0 ? (
+      {insufficientChangeovers.length > 0 ? (
         <Alert severity="warning" sx={{ mb: 2 }}>
+          <AlertTitle>换装缓冲不足，准备时间已在时间轴上画出</AlertTitle>
+          {insufficientChangeovers.map((gap) => (
+            <div key={`${gap.prevSessionId}-${gap.nextSessionId}`}>
+              {describeChangeover(gap, (id) => `排程段 ${id}`)}（{telescopeById(gap.telescopeId)?.code ?? gap.telescopeId}）
+            </div>
+          ))}
+        </Alert>
+      ) : null}
+
+      {dimmedTargets.length > 0 ? (        <Alert severity="warning" sx={{ mb: 2 }}>
           <AlertTitle>目标高度角低于阈值，已在时间轴上标灰</AlertTitle>
           {dimmedTargets.map((id) => {
             const target = targetById(id);
@@ -238,7 +260,9 @@ export default function OverviewPage() {
             </Typography>
           </Box>
         }
-      />
+      >
+        <ChangeoverLayer gaps={changeovers} totalMinutes={NIGHT_TOTAL_MINUTES} height={120} />
+      </Timeline>
 
       <Box sx={{ mt: 2 }}>
         <Typography variant="subtitle1" sx={{ mb: 1 }}>
@@ -261,6 +285,17 @@ export default function OverviewPage() {
                       <Chip size="small" variant="outlined" label={`${session.plannedFrames} 帧 × ${target?.exposureSec ?? '-'}s`} />
                       <StatusChip status={session.status} />
                       {ids.has(session.id) ? <Chip size="small" color="error" label="时段冲突" /> : null}
+                      {changeovers
+                        .filter((gap) => gap.prevSessionId === session.id)
+                        .map((gap) => (
+                          <Chip
+                            key={`${gap.prevSessionId}-${gap.nextSessionId}`}
+                            size="small"
+                            color={gap.insufficient ? 'warning' : 'default'}
+                            variant="outlined"
+                            label={`换装缓冲 ${gap.requiredMinutes} 分钟，下一段最早 ${gap.earliestStart} 开始`}
+                          />
+                        ))}
                       {altitude?.below ? <Chip size="small" color="warning" label={`高度角 ${altitude.altitude}° 低于阈值 ${target?.minAltitude}°`} /> : <Chip size="small" color="success" variant="outlined" label={`高度角 ${altitude?.altitude ?? '-'}°`} />}
                       {session.rescheduleReason ? <Typography variant="caption" color="text.secondary">{session.rescheduleReason}</Typography> : null}
                     </Stack>

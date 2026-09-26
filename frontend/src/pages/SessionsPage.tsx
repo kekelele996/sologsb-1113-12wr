@@ -31,6 +31,7 @@ import { useTargetStore } from '../stores/targetStore';
 import { useEquipmentStore } from '../stores/equipmentStore';
 import { FILTER_NAMES, SESSION_STATUSES, type SessionStatus } from '../types';
 import { axisMinutes, durationMinutes, formatMinutes } from '../utils/astro';
+import { CANDIDATE_SESSION_ID, candidateChangeoverViolations, describeChangeover } from '../utils/changeover';
 
 interface SessionFormState {
   nightId: string;
@@ -117,6 +118,27 @@ export default function SessionsPage() {
     });
   }, [dialogOpen, findConflicts, form.nightId, form.telescopeId, form.startTime, form.endTime, editingId]);
 
+  /** 保存前换装缓冲校验：与同望远镜相邻段比较终端与滤镜，配置变化且间隔不足时给出冲突 */
+  const liveChangeovers = useMemo(() => {
+    if (!dialogOpen || !form.telescopeId) return [];
+    return candidateChangeoverViolations(
+      {
+        nightId: form.nightId,
+        telescopeId: form.telescopeId,
+        instrumentId: form.instrumentId,
+        filterSlot: form.filterSlot,
+        startTime: form.startTime,
+        endTime: form.endTime,
+        ignoreSessionId: editingId || undefined,
+      },
+      sessions,
+      telescopes,
+    );
+  }, [dialogOpen, form.nightId, form.telescopeId, form.instrumentId, form.filterSlot, form.startTime, form.endTime, editingId, sessions, telescopes]);
+
+  /** 冲突对象名称：候选段显示为「当前编辑段」 */
+  const changeoverLabel = (sessionId: string) => (sessionId === CANDIDATE_SESSION_ID ? '当前编辑段' : sessionId);
+
   function openCreate() {
     setEditingId('');
     setError('');
@@ -169,6 +191,10 @@ export default function SessionsPage() {
     }
     if (liveConflicts.length > 0) {
       setError('该望远镜在所选时段已有排程，请调整时段或改期到备用观测夜');
+      return;
+    }
+    if (liveChangeovers.length > 0) {
+      setError(`换装缓冲不足：${liveChangeovers.map((gap) => describeChangeover(gap, changeoverLabel)).join('；')}。请错开时段或改期到备用观测夜`);
       return;
     }
     if (editingId) {
@@ -353,6 +379,14 @@ export default function SessionsPage() {
               时段校验通过，该望远镜此时段空闲
             </Alert>
           )}
+          {liveChangeovers.length > 0 ? (
+            <Alert severity="warning" sx={{ mb: 1.5 }}>
+              换装缓冲不足（保存将被阻止）：
+              {liveChangeovers.map((gap) => (
+                <div key={`${gap.prevSessionId}-${gap.nextSessionId}`}>{describeChangeover(gap, changeoverLabel)}</div>
+              ))}
+            </Alert>
+          ) : null}
           <FieldRow label="观测夜" required>
             <TextField select size="small" fullWidth value={form.nightId} onChange={(event) => setForm({ ...form, nightId: event.target.value })}>
               {nights.map((night) => (

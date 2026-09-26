@@ -55,22 +55,22 @@ npm run build    # 类型检查 + 生产构建
 │       ├── hooks/             # usePersistentStore（Dexie 读写 + Zustand 同步）/ useConflictCheck
 │       ├── pages/             # OverviewPage / TargetsPage / SessionsPage / EquipmentPage / ExportPage
 │       ├── router/index.tsx   # 路由表
-│       └── utils/             # astro.ts（高度角/可见窗口/月相）/ export.ts / id.ts
+│       └── utils/             # astro.ts（高度角/可见窗口/月相）/ changeover.ts（换装缓冲计算）/ export.ts / id.ts
 ```
 
 ## 功能与路由
 
 | 路由 | 页面 | 说明 |
 | --- | --- | --- |
-| `/` | 本夜编排总览 | 30 分钟刻度时间轴 + 月相与月出月落条带；冲突与低于高度阈值的目标自动标灰 |
+| `/` | 本夜编排总览 | 30 分钟刻度时间轴 + 月相与月出月落条带；冲突与低于高度阈值的目标自动标灰；相邻段更换终端/滤镜所需的换装缓冲以斜纹块画出 |
 | `/targets` | 观测目标库 | 按类型与优先级筛选、按视星等排序、维护地平高度阈值与曝光参数，并给出本夜可见窗口 |
-| `/sessions` | 排程段与冲突 | 冲突检测结果、按时段/望远镜校验，勾选多条批量改期到备用观测夜并填写改期原因 |
-| `/equipment` | 设备分配视图 | 行 = 望远镜、列 = 30 分钟时段；冲突格标红，点击可一键跳转到对应排程段 |
-| `/export` | 导出观测清单 | 目标、时刻、滤镜、帧数导出为文本与 CSV，支持打印视图 |
+| `/sessions` | 排程段与冲突 | 冲突检测结果、按时段/望远镜校验；保存前比较同望远镜相邻段的终端与滤镜，配置变化且间隔不足换装缓冲时阻止保存并指出冲突对象与最早开始时刻；勾选多条批量改期到备用观测夜并填写改期原因 |
+| `/equipment` | 设备分配视图 | 行 = 望远镜、列 = 30 分钟时段；冲突格标红，点击可一键跳转到对应排程段；登记每台望远镜的换装缓冲分钟数，缓冲窗口以橙色格画出 |
+| `/export` | 导出观测清单 | 目标、时刻、滤镜、帧数导出为文本与 CSV，支持打印视图；清单逐段写明换装缓冲与下一段最早开始时刻 |
 
 ## 数据存储说明
 
 - 全部数据存于浏览器 IndexedDB（Dexie，库名 `gbobsplan-db`），表：`targets`、`sessions`、`telescopes`、`instruments`、`nights`、`meta`。
-- `db.version(1).stores({...})` 声明索引；`db.version(2).upgrade(...)` 为排程段增加 `backupNightId` 索引，并给旧数据补齐 `schemaVersion` 与因云取消排程段的替补夜。
-- 首次打开且表为空时写入示例数据（12 个观测目标、5 个观测夜、4 台望远镜、4 台终端、14 段排程，含 1 处设备冲突与 1 条改期记录）。
+- `db.version(1).stores({...})` 声明索引；`db.version(2).upgrade(...)` 为排程段增加 `backupNightId` 索引，并给旧数据补齐 `schemaVersion` 与因云取消排程段的替补夜；`db.version(3).upgrade(...)` 为望远镜增加 `changeoverMinutes`（换装缓冲分钟数），旧数据按默认 15 分钟补齐。
+- 首次打开且表为空时写入示例数据（12 个观测目标、5 个观测夜、4 台望远镜、4 台终端、14 段排程，含 1 处设备冲突、若干换装缓冲不足示例与 1 条改期记录）。
 - 容器无状态：不使用数据库服务、不挂载命名卷，`docker compose down` 后数据仍留在浏览器中。

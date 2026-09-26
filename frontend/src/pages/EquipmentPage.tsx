@@ -25,16 +25,18 @@ import { useTargetStore } from '../stores/targetStore';
 import { useEquipmentStore } from '../stores/equipmentStore';
 import { NIGHT_TOTAL_MINUTES, TARGET_COLOR } from '../types';
 import { axisMinutes, minutesToTime } from '../utils/astro';
+import { changeoverGaps } from '../utils/changeover';
 
 const SLOT_MINUTES = 30;
 
-/** 望远镜与终端分配视图：行 = 设备、列 = 30 分钟时段，冲突格标红并可一键跳转 */
+/** 望远镜与终端分配视图：行 = 设备、列 = 30 分钟时段，冲突格标红并可一键跳转；换装缓冲格标橙 */
 export default function EquipmentPage() {
   usePersistentStore();
   const navigate = useNavigate();
   const telescopes = useEquipmentStore((s) => s.telescopes);
   const instruments = useEquipmentStore((s) => s.instruments);
   const fieldOfView = useEquipmentStore((s) => s.fieldOfView);
+  const updateTelescope = useEquipmentStore((s) => s.updateTelescope);
   const sessions = useSessionStore((s) => s.sessions);
   const nights = useNightStore((s) => s.nights);
   const currentNightId = useNightStore((s) => s.currentNightId);
@@ -48,6 +50,35 @@ export default function EquipmentPage() {
   const nightSessions = useMemo(() => sessions.filter((session) => session.nightId === activeNightId), [sessions, activeNightId]);
   const conflicts = useMemo(() => conflictsOfNight(activeNightId), [conflictsOfNight, activeNightId]);
   const slots = useMemo(() => Array.from({ length: NIGHT_TOTAL_MINUTES / SLOT_MINUTES }, (_, index) => index), []);
+
+  /** 本夜各望远镜相邻段的换装缓冲（终端或滤镜发生变化的段对） */
+  const changeovers = useMemo(() => changeoverGaps(sessions, telescopes, activeNightId), [sessions, telescopes, activeNightId]);
+  const insufficientCount = useMemo(() => changeovers.filter((gap) => gap.insufficient).length, [changeovers]);
+
+  /** 换装缓冲登记草稿：telescopeId → 分钟数 */
+  const [bufferDraft, setBufferDraft] = useState<Record<string, number>>({});
+  const [notice, setNotice] = useState('');
+
+  /** 把登记草稿写回各望远镜（仅保存有修改的行） */
+  async function saveBuffers() {
+    for (const telescope of telescopes) {
+      const draft = bufferDraft[telescope.id];
+      if (typeof draft === 'number' && Number.isFinite(draft) && draft !== telescope.changeoverMinutes) {
+        await updateTelescope(telescope.id, { changeoverMinutes: Math.max(0, Math.round(draft)) });
+      }
+    }
+    setBufferDraft({});
+    setNotice('已登记各望远镜换装缓冲分钟数');
+  }
+
+  /** 某望远镜在某时段内重叠到的换装缓冲窗口 */
+  const bufferInSlot = (telescopeId: string, slot: number) => {
+    const slotStart = slot * SLOT_MINUTES;
+    const slotEnd = slotStart + SLOT_MINUTES;
+    return changeovers.filter(
+      (gap) => gap.telescopeId === telescopeId && Math.min(gap.earliestStartAxis, slotEnd) - Math.max(gap.prevEndAxis, slotStart) > 0,
+    );
+  };
 
   const targetById = (id: string) => targets.find((target) => target.id === id);
   const pairedInstrument = (telescopeCode: string) => instruments.find((instrument) => instrument.telescopeCode === telescopeCode);
@@ -73,8 +104,40 @@ export default function EquipmentPage() {
         望远镜与终端分配视图
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        以行 = 设备、列 = 30 分钟时段的占用网格呈现；同一望远镜在同一时段排入多段即标红，点击格子可一键跳转到对应排程段。
+        以行 = 设备、列 = 30 分钟时段的占用网格呈现；同一望远镜在同一时段排入多段即标红，点击格子可一键跳转到对应排程段；相邻段更换终端或滤镜时，所需的换装缓冲以橙色格画出。
       </Typography>
+
+      {notice ? (
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>
+          {notice}
+        </Alert>
+      ) : null}
+
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="subtitle1" sx={{ mb: 0.5 }}>
+          换装缓冲登记（分钟）
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          主夜连续观测时，同一台望远镜相邻两段若更换终端或滤镜，需留出这段准备时间重新调焦；登记后排程保存、总览与导出都会按此校验与标注。
+        </Typography>
+        <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }} alignItems="center">
+          {telescopes.map((telescope) => (
+            <TextField
+              key={telescope.id}
+              size="small"
+              type="number"
+              label={`${telescope.code} 换装缓冲`}
+              value={bufferDraft[telescope.id] ?? telescope.changeoverMinutes}
+              onChange={(event) => setBufferDraft((prev) => ({ ...prev, [telescope.id]: Number(event.target.value) }))}
+              inputProps={{ min: 0, max: 240, step: 5 }}
+              sx={{ width: 160 }}
+            />
+          ))}
+          <Button variant="contained" disabled={Object.keys(bufferDraft).length === 0} onClick={() => void saveBuffers()}>
+            保存缓冲设置
+          </Button>
+        </Stack>
+      </Paper>
 
       <Stack direction="row" spacing={2} sx={{ mb: 2, flexWrap: 'wrap' }} alignItems="center">
         <TextField
@@ -95,6 +158,12 @@ export default function EquipmentPage() {
           ))}
         </TextField>
         <Chip size="small" label={night ? `月相 ${night.moonPhasePct}% · 云量 ${night.cloudText}` : '未选择观测夜'} />
+        <Chip
+          size="small"
+          color={insufficientCount ? 'warning' : 'default'}
+          variant={insufficientCount ? 'filled' : 'outlined'}
+          label={`换装缓冲 ${changeovers.length} 段${insufficientCount ? `（不足 ${insufficientCount}）` : ''}`}
+        />
         <ConflictBadge conflicts={conflicts} />
       </Stack>
 
@@ -108,6 +177,19 @@ export default function EquipmentPage() {
           本夜各望远镜时段无重叠，无设备冲突
         </Alert>
       )}
+
+      {insufficientCount > 0 ? (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          本夜存在 {insufficientCount} 处换装缓冲不足（网格中以橙色格画出准备时间）：{' '}
+          {changeovers
+            .filter((gap) => gap.insufficient)
+            .map(
+              (gap) =>
+                `${gap.prevSessionId}→${gap.nextSessionId}（需 ${gap.requiredMinutes} 分钟，实际 ${Math.max(0, gap.gapMinutes)} 分钟，${gap.nextSessionId} 最早 ${gap.earliestStart} 开始）`,
+            )
+            .join('；')}
+        </Alert>
+      ) : null}
 
       <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
         <Table size="small" sx={{ minWidth: 1180 }}>
@@ -141,7 +223,7 @@ export default function EquipmentPage() {
                         />
                       </Stack>
                       <Typography variant="caption" color="text.secondary">
-                        {telescope.apertureMm}mm · f/{telescope.focalLengthMm}mm · {telescope.mount} · 载荷 {telescope.maxPayloadKg}kg
+                        {telescope.apertureMm}mm · f/{telescope.focalLengthMm}mm · {telescope.mount} · 载荷 {telescope.maxPayloadKg}kg · 换装缓冲 {telescope.changeoverMinutes} 分钟
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
                         {instrument ? `${instrument.model}（${instrument.terminalType}）` : '未配终端'}
@@ -153,6 +235,12 @@ export default function EquipmentPage() {
                     const items = occupancy(telescope.id, slot);
                     const isConflict = items.length > 1;
                     const target = items[0] ? targetById(items[0].targetId) : undefined;
+                    const buffers = items.length === 0 ? bufferInSlot(telescope.id, slot) : [];
+                    const buffer = buffers[0];
+                    /** 该格内排程段是否起步于不足的换装缓冲窗口内（前段换装尚未完成） */
+                    const rushed =
+                      items.length === 1 &&
+                      changeovers.some((gap) => gap.telescopeId === telescope.id && gap.nextSessionId === items[0].id && gap.insufficient);
                     return (
                       <TableCell
                         key={slot}
@@ -160,11 +248,15 @@ export default function EquipmentPage() {
                         sx={{
                           px: 0.25,
                           py: 0.5,
-                          bgcolor: isConflict ? 'error.main' : items.length === 1 ? TARGET_COLOR[target?.type ?? '星云'] : 'transparent',
-                          color: items.length ? '#fff' : 'text.secondary',
+                          bgcolor: isConflict ? 'error.main' : items.length === 1 ? TARGET_COLOR[target?.type ?? '星云'] : buffer ? 'warning.main' : 'transparent',
+                          color: items.length || buffer ? '#fff' : 'text.secondary',
                           cursor: items.length ? 'pointer' : 'default',
                           borderLeft: '1px solid',
                           borderColor: 'divider',
+                          ...(rushed ? { outline: '2px solid', outlineColor: 'warning.dark', outlineOffset: -2 } : null),
+                          ...(buffer
+                            ? { background: 'repeating-linear-gradient(45deg, rgba(237,108,2,0.85) 0 6px, rgba(237,108,2,0.45) 6px 12px)' }
+                            : null),
                         }}
                         onClick={() => {
                           if (items.length === 0) return;
@@ -172,7 +264,17 @@ export default function EquipmentPage() {
                         }}
                       >
                         {items.length === 0 ? (
-                          <Typography variant="caption">·</Typography>
+                          buffer ? (
+                            <Tooltip
+                              title={`换装缓冲 ${minutesToTime(Math.max(buffer.prevEndAxis, slot * SLOT_MINUTES))} 起：${buffer.prevSessionId}→${buffer.nextSessionId} 需 ${buffer.requiredMinutes} 分钟（实际 ${Math.max(0, buffer.gapMinutes)} 分钟），下一段最早 ${buffer.earliestStart} 开始`}
+                            >
+                              <Typography variant="caption" sx={{ fontWeight: 700 }}>
+                                换装
+                              </Typography>
+                            </Tooltip>
+                          ) : (
+                            <Typography variant="caption">·</Typography>
+                          )
                         ) : isConflict ? (
                           <Tooltip title={items.map((item) => `${item.startTime}-${item.endTime} ${targetById(item.targetId)?.name ?? ''}`).join(' ｜ ')}>
                             <Typography variant="caption" sx={{ fontWeight: 700 }}>

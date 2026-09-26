@@ -10,6 +10,7 @@ export interface TelescopeInput {
   mount: string;
   terminals: TerminalType[];
   maxPayloadKg: number;
+  changeoverMinutes: number;
   status: TelescopeStatus;
 }
 
@@ -60,6 +61,7 @@ export const useEquipmentStore = create<EquipmentState>()((set, get) => ({
       mount: input.mount.trim(),
       terminals: input.terminals.length ? input.terminals : ['CMOS 相机'],
       maxPayloadKg: Number(input.maxPayloadKg) || 0,
+      changeoverMinutes: Math.max(0, Math.round(Number(input.changeoverMinutes) || 0)),
       status: input.status,
     };
     await persistRow('telescopes', telescope);
