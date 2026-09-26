@@ -19,14 +19,25 @@ export interface ConflictBadgeProps {
 export default function ConflictBadge({ conflicts, onSelect, compact = false }: ConflictBadgeProps) {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
 
+  const overlapCount = conflicts.filter((conflict) => conflict.kind === 'overlap').length;
+  const changeoverCount = conflicts.filter((conflict) => conflict.kind === 'changeover').length;
+
   if (conflicts.length === 0) {
     return <Chip label="无冲突" size="small" color="success" variant="outlined" />;
   }
 
+  const label = compact
+    ? `冲突 ${conflicts.length}`
+    : overlapCount && changeoverCount
+      ? `重叠 ${overlapCount} · 换装 ${changeoverCount}`
+      : overlapCount
+        ? `设备冲突 ${overlapCount} 处`
+        : `换装缓冲冲突 ${changeoverCount} 处`;
+
   return (
     <>
       <Chip
-        label={compact ? `冲突 ${conflicts.length}` : `设备冲突 ${conflicts.length} 处`}
+        label={label}
         size="small"
         color="error"
         onClick={(event) => setAnchorEl(event.currentTarget)}
@@ -39,7 +50,7 @@ export default function ConflictBadge({ conflicts, onSelect, compact = false }: 
       >
         <Box sx={{ p: 1.5, maxWidth: 380 }}>
           <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-            冲突明细（同一望远镜时段重叠）
+            冲突明细（时段重叠或换装缓冲不足）
           </Typography>
           <List dense disablePadding>
             {conflicts.map((conflict) => (

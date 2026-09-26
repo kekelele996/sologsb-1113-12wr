@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { db, deleteRow, persistRow } from '../hooks/usePersistentStore';
 import { uid } from '../utils/id';
 import type { FieldOfView, Instrument, Telescope, TelescopeStatus, TerminalType } from '../types';
+import { DEFAULT_CHANGEOVER_BUFFER_MINUTES } from '../types';
 
 export interface TelescopeInput {
   code: string;
@@ -11,6 +12,7 @@ export interface TelescopeInput {
   terminals: TerminalType[];
   maxPayloadKg: number;
   status: TelescopeStatus;
+  changeoverBufferMinutes: number;
 }
 
 export interface InstrumentInput {
@@ -61,6 +63,9 @@ export const useEquipmentStore = create<EquipmentState>()((set, get) => ({
       terminals: input.terminals.length ? input.terminals : ['CMOS 相机'],
       maxPayloadKg: Number(input.maxPayloadKg) || 0,
       status: input.status,
+      changeoverBufferMinutes: Number.isFinite(Number(input.changeoverBufferMinutes))
+        ? Math.max(0, Number(input.changeoverBufferMinutes))
+        : DEFAULT_CHANGEOVER_BUFFER_MINUTES,
     };
     await persistRow('telescopes', telescope);
     set({ telescopes: [...get().telescopes, telescope].sort((a, b) => a.code.localeCompare(b.code)) });
@@ -70,7 +75,12 @@ export const useEquipmentStore = create<EquipmentState>()((set, get) => ({
   updateTelescope: async (id, patch) => {
     const current = get().telescopes.find((telescope) => telescope.id === id);
     if (!current) return;
-    const next: Telescope = { ...current, ...patch };
+    const changeoverBufferMinutes = Number(patch.changeoverBufferMinutes ?? current.changeoverBufferMinutes ?? DEFAULT_CHANGEOVER_BUFFER_MINUTES);
+    const next: Telescope = {
+      ...current,
+      ...patch,
+      changeoverBufferMinutes: Number.isFinite(changeoverBufferMinutes) ? Math.max(0, changeoverBufferMinutes) : DEFAULT_CHANGEOVER_BUFFER_MINUTES,
+    };
     await persistRow('telescopes', next);
     set({ telescopes: get().telescopes.map((telescope) => (telescope.id === id ? next : telescope)) });
   },

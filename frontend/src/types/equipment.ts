@@ -21,6 +21,8 @@ export interface Telescope {
   maxPayloadKg: number;
   /** 当前状态 */
   status: TelescopeStatus;
+  /** 换装缓冲（分钟）：相邻排程更换终端或滤镜后的准备时间 */
+  changeoverBufferMinutes: number;
 }
 
 /** 终端（相机 / 导星相机 / 光谱仪） */
@@ -56,3 +58,6 @@ export interface FieldOfView {
 
 export const TERMINAL_TYPES: TerminalType[] = ['CMOS 相机', '导星相机', '光谱仪'];
 export const TELESCOPE_STATUSES: TelescopeStatus[] = ['可用', '维护中', '外出'];
+
+/** 默认换装缓冲（分钟） */
+export const DEFAULT_CHANGEOVER_BUFFER_MINUTES = 20;

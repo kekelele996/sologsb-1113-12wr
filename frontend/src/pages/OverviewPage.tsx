@@ -8,6 +8,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
+import Tooltip from '@mui/material/Tooltip';
 import Chip from '@mui/material/Chip';
 import Timeline, { type TimelineBar } from '../components/common/Timeline';
 import StatusChip from '../components/common/StatusChip';
@@ -20,6 +21,7 @@ import { useTargetStore } from '../stores/targetStore';
 import { useEquipmentStore } from '../stores/equipmentStore';
 import { NIGHT_TOTAL_MINUTES, TARGET_COLOR } from '../types';
 import { altitudeAt, axisMinutes, isBelowThreshold, minutesToTime, moonBrightnessFactor, moonConflict, moonPhaseText, timelineTicks } from '../utils/astro';
+import { changeoversForNight } from '../utils/changeover';
 
 /** 本夜编排总览：30 分钟刻度时间轴 + 月相与月出月落条带 + 冲突与标灰提示 */
 export default function OverviewPage() {
@@ -37,6 +39,11 @@ export default function OverviewPage() {
   const nightSessions = useMemo(() => sessions.filter((session) => session.nightId === night?.id), [sessions, night?.id]);
   const ids = useMemo(() => conflictIds(night?.id), [conflictIds, night?.id]);
   const conflicts = useMemo(() => conflictsOfNight(night?.id ?? ''), [conflictsOfNight, night?.id]);
+  const changeovers = useMemo(
+    () => (night ? changeoversForNight(night.id, nightSessions, telescopes) : []),
+    [night, nightSessions, telescopes],
+  );
+  const unmetChangeovers = changeovers.filter((item) => !item.satisfied);
 
   /** 以夜间 22:00 作为高度角评估时刻 */
   const evaluateDate = useMemo(() => new Date(`${night?.date ?? '2025-10-11'}T22:00:00`), [night?.date]);
@@ -77,6 +84,38 @@ export default function OverviewPage() {
     [nightSessions, targets, altitudes, telescopes, instruments],
   );
 
+  const prepOverlays = useMemo(
+    () =>
+      changeovers.map((item) => {
+        const startMinute = Math.max(0, Math.min(NIGHT_TOTAL_MINUTES, item.prepStartMinute));
+        const endMinute = Math.max(startMinute + 2, Math.min(NIGHT_TOTAL_MINUTES, item.prepEndMinute));
+        return (
+          <Tooltip
+            key={`${item.previousSession.id}-${item.nextSession.id}`}
+            title={`换装准备 ${item.bufferMinutes} 分钟：${item.previousSession.id} → ${item.nextSession.id}；实际 ${item.gapMinutes} 分钟，下一段最早 ${item.earliestStartTime}`}
+          >
+            <Box
+              sx={{
+                position: 'absolute',
+                left: `${(startMinute / NIGHT_TOTAL_MINUTES) * 100}%`,
+                top: 18,
+                width: `${((endMinute - startMinute) / NIGHT_TOTAL_MINUTES) * 100}%`,
+                height: 86,
+                minWidth: 8,
+                zIndex: item.satisfied ? 1 : 3,
+                border: '2px dashed',
+                borderColor: item.satisfied ? 'warning.main' : 'error.main',
+                bgcolor: item.satisfied ? 'rgba(237,108,2,.18)' : 'rgba(211,47,47,.18)',
+                backgroundImage: 'repeating-linear-gradient(45deg, rgba(255,255,255,.25) 0 5px, transparent 5px 11px)',
+                borderRadius: 1,
+              }}
+            />
+          </Tooltip>
+        );
+      }),
+    [changeovers],
+  );
+
   const totalFrames = nightSessions.reduce((sum, session) => sum + session.plannedFrames, 0);
   const dimmedTargets = useMemo(
     () => Array.from(new Set(nightSessions.map((session) => session.targetId))).filter((id) => altitudes.get(id)?.below),
@@ -103,7 +142,7 @@ export default function OverviewPage() {
         本夜编排总览
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        按 30 分钟刻度展示时间轴与已排程段，月相与月出月落条带悬浮于时间轴上方；低于最小地平高度阈值的目标自动标灰。
+        按 30 分钟刻度展示时间轴与已排程段，斜纹段为终端或滤镜换装准备时间；月相与月出月落条带悬浮于时间轴上方；低于最小地平高度阈值的目标自动标灰。
       </Typography>
 
       <Stack direction="row" spacing={2} sx={{ mb: 2, flexWrap: 'wrap' }} alignItems="center">
@@ -162,9 +201,22 @@ export default function OverviewPage() {
       {conflicts.length > 0 ? (
         <Alert severity="error" sx={{ mb: 2 }}>
           <AlertTitle>检测到 {conflicts.length} 处设备时段冲突</AlertTitle>
-          {conflicts.map((conflict) => (
-            <div key={`${conflict.sessionId}-${conflict.otherId}`}>
-              排程段 {conflict.sessionId} 与 {conflict.otherId} 在同一望远镜（{telescopeById(conflict.telescopeId)?.code ?? conflict.telescopeId}）上{conflict.overlapText}
+          {conflicts
+            .filter((conflict) => conflict.kind === 'overlap')
+            .map((conflict) => (
+              <div key={`${conflict.sessionId}-${conflict.otherId}`}>
+                排程段 {conflict.sessionId} 与 {conflict.otherId} 在同一望远镜（{telescopeById(conflict.telescopeId)?.code ?? conflict.telescopeId}）上{conflict.overlapText}
+              </div>
+            ))}
+        </Alert>
+      ) : null}
+
+      {unmetChangeovers.length > 0 ? (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          <AlertTitle>检测到 {unmetChangeovers.length} 处换装缓冲不足</AlertTitle>
+          {unmetChangeovers.map((item) => (
+            <div key={`${item.previousSession.id}-${item.nextSession.id}`}>
+              {item.previousSession.id} → {item.nextSession.id}：终端或滤镜变化，实际间隔 {item.gapMinutes} 分钟，需 {item.bufferMinutes} 分钟；下一段最早 {item.earliestStartTime} 开始
             </div>
           ))}
         </Alert>
@@ -238,7 +290,9 @@ export default function OverviewPage() {
             </Typography>
           </Box>
         }
-      />
+      >
+        {prepOverlays}
+      </Timeline>
 
       <Box sx={{ mt: 2 }}>
         <Typography variant="subtitle1" sx={{ mb: 1 }}>
@@ -250,6 +304,7 @@ export default function OverviewPage() {
             .map((session) => {
               const target = targetById(session.targetId);
               const altitude = altitudes.get(session.targetId);
+              const prep = changeovers.find((item) => item.nextSession.id === session.id);
               return (
                 <Card key={session.id} variant="outlined">
                   <CardContent sx={{ py: 1.25, '&:last-child': { pb: 1.25 } }}>
@@ -261,6 +316,14 @@ export default function OverviewPage() {
                       <Chip size="small" variant="outlined" label={`${session.plannedFrames} 帧 × ${target?.exposureSec ?? '-'}s`} />
                       <StatusChip status={session.status} />
                       {ids.has(session.id) ? <Chip size="small" color="error" label="时段冲突" /> : null}
+                      {prep ? (
+                        <Chip
+                          size="small"
+                          color={prep.satisfied ? 'warning' : 'error'}
+                          variant={prep.satisfied ? 'outlined' : 'filled'}
+                          label={`换装准备：最早 ${prep.earliestStartTime}`}
+                        />
+                      ) : null}
                       {altitude?.below ? <Chip size="small" color="warning" label={`高度角 ${altitude.altitude}° 低于阈值 ${target?.minAltitude}°`} /> : <Chip size="small" color="success" variant="outlined" label={`高度角 ${altitude?.altitude ?? '-'}°`} />}
                       {session.rescheduleReason ? <Typography variant="caption" color="text.secondary">{session.rescheduleReason}</Typography> : null}
                     </Stack>

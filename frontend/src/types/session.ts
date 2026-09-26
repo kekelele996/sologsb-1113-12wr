@@ -30,8 +30,13 @@ export interface ObsSession {
   schemaVersion: number;
 }
 
+/** 冲突类型 */
+export type ConflictKind = 'overlap' | 'changeover';
+
 /** 冲突项 */
 export interface ConflictItem {
+  /** 冲突类型 */
+  kind: ConflictKind;
   /** 当前排程段 */
   sessionId: string;
   /** 与之冲突的排程段 */
@@ -40,8 +45,16 @@ export interface ConflictItem {
   telescopeId: string;
   /** 重叠分钟数 */
   overlapMinutes: number;
-  /** 重叠区间文案 */
+  /** 重叠区间文案 / 换装校验文案 */
   overlapText: string;
+  /** 下一段最早可开始时刻（换装冲突） */
+  earliestStartTime?: string;
+  /** 需要的换装缓冲分钟数（换装冲突） */
+  bufferMinutes?: number;
+  /** 实际间隔分钟数（换装冲突） */
+  gapMinutes?: number;
+  /** 当前段是否为换装前一段 */
+  subjectIsPrevious?: boolean;
 }
 
 export const SESSION_STATUSES: SessionStatus[] = ['待执行', '进行中', '已完成', '因云取消'];

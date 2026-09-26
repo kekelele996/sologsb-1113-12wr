@@ -113,9 +113,24 @@ export default function SessionsPage() {
       telescopeId: form.telescopeId,
       startTime: form.startTime,
       endTime: form.endTime,
+      instrumentId: form.instrumentId,
+      filterSlot: form.filterSlot,
       ignoreSessionId: editingId || undefined,
     });
-  }, [dialogOpen, findConflicts, form.nightId, form.telescopeId, form.startTime, form.endTime, editingId]);
+  }, [
+    dialogOpen,
+    findConflicts,
+    form.nightId,
+    form.telescopeId,
+    form.startTime,
+    form.endTime,
+    form.instrumentId,
+    form.filterSlot,
+    editingId,
+  ]);
+  const liveOverlapConflicts = liveConflicts.filter((conflict) => conflict.kind === 'overlap');
+  const liveChangeoverConflicts = liveConflicts.filter((conflict) => conflict.kind === 'changeover');
+  const selectedTelescopeBuffer = telescopeById(form.telescopeId)?.changeoverBufferMinutes ?? 0;
 
   function openCreate() {
     setEditingId('');
@@ -167,8 +182,18 @@ export default function SessionsPage() {
       setError('结束时刻必须晚于开始时刻');
       return;
     }
-    if (liveConflicts.length > 0) {
+    if (liveOverlapConflicts.length > 0) {
       setError('该望远镜在所选时段已有排程，请调整时段或改期到备用观测夜');
+      return;
+    }
+    if (liveChangeoverConflicts.length > 0) {
+      setError(
+        `换装缓冲不足：${liveChangeoverConflicts
+          .map((conflict) =>
+            conflict.subjectIsPrevious ? `下一段 ${conflict.otherId} 最早 ${conflict.earliestStartTime} 开始` : `${conflict.otherId} → 本段最早 ${conflict.earliestStartTime} 开始`,
+          )
+          .join('；')}`,
+      );
       return;
     }
     if (editingId) {
@@ -199,7 +224,7 @@ export default function SessionsPage() {
         排程段列表与冲突检测
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        同一时段同一望远镜重复排入即进入冲突列表；支持勾选多个排程段批量改期到备用观测夜并填写改期原因。
+        同一时段同一望远镜重复排入即进入冲突列表；保存前还会校验相邻段更换终端或滤镜时的换装缓冲，并指出冲突对象和最早开始时刻。
       </Typography>
 
       {notice ? (
@@ -271,6 +296,8 @@ export default function SessionsPage() {
                 telescopeId: session.telescopeId,
                 startTime: session.startTime,
                 endTime: session.endTime,
+                instrumentId: session.instrumentId,
+                filterSlot: session.filterSlot,
                 ignoreSessionId: session.id,
               });
               return (
@@ -343,16 +370,23 @@ export default function SessionsPage() {
               {error}
             </Alert>
           ) : null}
-          {liveConflicts.length > 0 ? (
+          {liveOverlapConflicts.length > 0 ? (
             <Alert severity="warning" sx={{ mb: 1.5 }}>
-              该望远镜在所选时段已有 {liveConflicts.length} 段排程：
-              {liveConflicts.map((conflict) => ` ${conflict.otherId}（${conflict.overlapText}）`).join('；')}
+              该望远镜在所选时段已有 {liveOverlapConflicts.length} 段排程：
+              {liveOverlapConflicts.map((conflict) => ` ${conflict.otherId}（${conflict.overlapText}）`).join('；')}
             </Alert>
-          ) : (
+          ) : null}
+          {liveChangeoverConflicts.length > 0 ? (
+            <Alert severity="warning" sx={{ mb: 1.5 }}>
+              相邻段终端或滤镜变化，需 {selectedTelescopeBuffer} 分钟换装缓冲：
+              {liveChangeoverConflicts.map((conflict, index) => ` ${index + 1}. ${conflict.otherId}：${conflict.overlapText}`).join('；')}
+            </Alert>
+          ) : null}
+          {liveConflicts.length === 0 ? (
             <Alert severity="success" sx={{ mb: 1.5 }}>
-              时段校验通过，该望远镜此时段空闲
+              时段校验通过；终端与滤镜相同，或相邻间隔已满足 {selectedTelescopeBuffer} 分钟换装缓冲
             </Alert>
-          )}
+          ) : null}
           <FieldRow label="观测夜" required>
             <TextField select size="small" fullWidth value={form.nightId} onChange={(event) => setForm({ ...form, nightId: event.target.value })}>
               {nights.map((night) => (

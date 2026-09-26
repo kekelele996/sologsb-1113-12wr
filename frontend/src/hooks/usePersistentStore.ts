@@ -1,12 +1,13 @@
 import Dexie, { type Table } from 'dexie';
 import { useEffect, useState } from 'react';
 import type { Instrument, ObsNight, ObsSession, ObsTarget, Telescope } from '../types';
+import { DEFAULT_CHANGEOVER_BUFFER_MINUTES } from '../types';
 
 /** IndexedDB 库名（浏览器本地存储，无后端） */
 export const DB_NAME = 'gbobsplan-db';
 
 /** 当前数据结构版本，写入每条记录并用于升级迁移判定 */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 class ObsPlanDB extends Dexie {
   targets!: Table<ObsTarget, string>;
@@ -47,12 +48,40 @@ class ObsPlanDB extends Dexie {
           .table('sessions')
           .toCollection()
           .modify((row: ObsSession) => {
-            if (row.schemaVersion !== SCHEMA_VERSION) {
-              row.schemaVersion = SCHEMA_VERSION;
+            // v1 → v2：补齐替补夜与数据结构版本（继续升级时还会由 v3 再次更新版本号）
+            if (row.schemaVersion === undefined || row.schemaVersion < 2) {
+              row.schemaVersion = 2;
             }
             if (!row.backupNightId && row.status === '因云取消' && backupNight) {
               row.backupNightId = backupNight.id;
             }
+          });
+      });
+
+    // v3：望远镜增加每台设备的换装缓冲分钟数；旧数据给默认值
+    this.version(3)
+      .stores({
+        targets: 'id, name, catalog, type, priority, magnitude',
+        sessions: 'id, nightId, targetId, telescopeId, instrumentId, startTime, status, backupNightId',
+        telescopes: 'id, code, status',
+        instruments: 'id, model, telescopeCode, terminalType',
+        nights: 'id, date, siteName, primary, backup',
+        meta: 'key',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('telescopes')
+          .toCollection()
+          .modify((row: Telescope) => {
+            if (!Number.isFinite(Number(row.changeoverBufferMinutes))) {
+              row.changeoverBufferMinutes = DEFAULT_CHANGEOVER_BUFFER_MINUTES;
+            }
+          });
+        await tx
+          .table('sessions')
+          .toCollection()
+          .modify((row: ObsSession) => {
+            row.schemaVersion = SCHEMA_VERSION;
           });
       });
   }
@@ -103,10 +132,10 @@ const SEED_NIGHTS: ObsNight[] = [
 ];
 
 const SEED_TELESCOPES: Telescope[] = [
-  { id: 'tel-001', code: 'T-01', apertureMm: 150, focalLengthMm: 900, mount: 'EQ6-R Pro', terminals: ['CMOS 相机', '导星相机'], maxPayloadKg: 12, status: '可用' },
-  { id: 'tel-002', code: 'T-02', apertureMm: 200, focalLengthMm: 1000, mount: 'CEM70', terminals: ['CMOS 相机', '导星相机', '光谱仪'], maxPayloadKg: 15, status: '可用' },
-  { id: 'tel-003', code: 'T-03', apertureMm: 280, focalLengthMm: 2800, mount: 'CEM120', terminals: ['CMOS 相机', '光谱仪'], maxPayloadKg: 25, status: '维护中', },
-  { id: 'tel-004', code: 'T-04', apertureMm: 80, focalLengthMm: 480, mount: 'Star Adventurer GTi', terminals: ['导星相机'], maxPayloadKg: 5, status: '外出' },
+  { id: 'tel-001', code: 'T-01', apertureMm: 150, focalLengthMm: 900, mount: 'EQ6-R Pro', terminals: ['CMOS 相机', '导星相机'], maxPayloadKg: 12, status: '可用', changeoverBufferMinutes: 20 },
+  { id: 'tel-002', code: 'T-02', apertureMm: 200, focalLengthMm: 1000, mount: 'CEM70', terminals: ['CMOS 相机', '导星相机', '光谱仪'], maxPayloadKg: 15, status: '可用', changeoverBufferMinutes: 25 },
+  { id: 'tel-003', code: 'T-03', apertureMm: 280, focalLengthMm: 2800, mount: 'CEM120', terminals: ['CMOS 相机', '光谱仪'], maxPayloadKg: 25, status: '维护中', changeoverBufferMinutes: 30 },
+  { id: 'tel-004', code: 'T-04', apertureMm: 80, focalLengthMm: 480, mount: 'Star Adventurer GTi', terminals: ['导星相机'], maxPayloadKg: 5, status: '外出', changeoverBufferMinutes: 15 },
 ];
 
 const SEED_INSTRUMENTS: Instrument[] = [

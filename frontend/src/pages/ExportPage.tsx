@@ -19,6 +19,7 @@ import { useTargetStore } from '../stores/targetStore';
 import { useEquipmentStore } from '../stores/equipmentStore';
 import { NIGHT_TOTAL_MINUTES, TARGET_COLOR } from '../types';
 import { axisMinutes, timelineTicks } from '../utils/astro';
+import { changeoversForNight } from '../utils/changeover';
 import { buildNightPlanText, buildPlanCsv, downloadText, printPage } from '../utils/export';
 
 /** 导出当晚观测清单（文本 / CSV / 打印视图） */
@@ -38,6 +39,11 @@ export default function ExportPage() {
   const nightSessions = useMemo(() => sessions.filter((session) => session.nightId === night?.id), [sessions, night?.id]);
   const conflicts = useMemo(() => conflictsOfNight(night?.id ?? ''), [conflictsOfNight, night?.id]);
   const ids = useMemo(() => conflictIds(night?.id), [conflictIds, night?.id]);
+  const changeovers = useMemo(
+    () => (night ? changeoversForNight(night.id, nightSessions, telescopes) : []),
+    [night, nightSessions, telescopes],
+  );
+  const changeoverByNext = useMemo(() => new Map(changeovers.map((item) => [item.nextSession.id, item])), [changeovers]);
 
   const planText = useMemo(
     () => buildNightPlanText({ night, sessions: nightSessions, targets, telescopes, instruments }),
@@ -91,6 +97,7 @@ export default function ExportPage() {
           ))}
         </TextField>
         <Chip size="small" label={`排程段 ${nightSessions.length}`} />
+        <Chip size="small" color={changeovers.some((item) => !item.satisfied) ? 'warning' : 'default'} variant="outlined" label={`换装准备 ${changeovers.length}`} />
         <Chip size="small" label={`计划帧数合计 ${nightSessions.reduce((sum, session) => sum + session.plannedFrames, 0)}`} />
         <ConflictBadge conflicts={conflicts} />
         <Button
@@ -139,6 +146,7 @@ export default function ExportPage() {
               .sort((a, b) => axisMinutes(a.startTime) - axisMinutes(b.startTime))
               .map((session) => {
                 const target = targets.find((item) => item.id === session.targetId);
+                const changeover = changeoverByNext.get(session.id);
                 return (
                   <Stack key={session.id} direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                     <Chip size="small" label={`${session.startTime}-${session.endTime}`} />
@@ -146,6 +154,16 @@ export default function ExportPage() {
                     <Chip size="small" variant="outlined" label={session.filterSlot} />
                     <Chip size="small" variant="outlined" label={`${session.plannedFrames} 帧`} />
                     <StatusChip status={session.status} />
+                    {changeover ? (
+                      <Chip
+                        size="small"
+                        color={changeover.satisfied ? 'warning' : 'error'}
+                        variant="outlined"
+                        label={`下段最早 ${changeover.earliestStartTime}`}
+                      />
+                    ) : (
+                      <Chip size="small" variant="outlined" label="无需换装" />
+                    )}
                   </Stack>
                 );
               })}
